@@ -1,13 +1,12 @@
 import boto3
 
 # Initialize a DynamoDB client
-dynamodb_client = boto3.client('dynamodb', region_name='us-east-2', endpoint_url='http://localhost:8000')
+dynamodb = boto3.resource('dynamodb', region_name='us-east-2', endpoint_url='http://localhost:8000')
 
 # List all tables
-response = dynamodb_client.list_tables()
-tables = response['TableNames']
+table_list = dynamodb.tables.all()
 
-# Print the names of all tables
-print("Available tables:")
-for table in tables:
-    print(table)
+# Print the names of all tables and their item count
+for table in table_list:
+    item_count = len(table.scan()['Items'])
+    print(f"Table: {table.name}, Item Count: {item_count}")

@@ -1,6 +1,6 @@
 import sqlite3
-
 import boto3
+from botocore.exceptions import ClientError
 
 # Connect to SQLite database
 conn = sqlite3.connect('./data/data.db')
@@ -15,35 +15,7 @@ rows = cursor.fetchall()
 
 # Connect to DynamoDB
 dynamodb = boto3.resource('dynamodb', region_name='us-east-2', endpoint_url='http://localhost:8000')
-
-# Create the DynamoDB table if it doesn't already exist
-try:
-    table = dynamodb.create_table(
-        TableName='Contacts',
-        KeySchema=[
-            {
-                'AttributeName': 'name',
-                'KeyType': 'HASH'  # Partition key
-            }
-        ],
-        AttributeDefinitions=[
-            {
-                'AttributeName': 'name',
-                'AttributeType': 'S'  # String type
-            }
-        ],
-        ProvisionedThroughput={
-            'ReadCapacityUnits': 10,
-            'WriteCapacityUnits': 10
-        }
-    )
-    # Wait until the table is created
-    table.meta.client.get_waiter('table_exists').wait(TableName='Contacts')
-    print("Table 'Contacts' has been created successfully.")
-except dynamodb.meta.client.exceptions.ResourceInUseException:
-    # The table already exists
-    table = dynamodb.Table('Contacts')
-    print("Table 'Contacts' already exists.")
+table = dynamodb.Table('Contacts')
 
 # Insert data into the DynamoDB table
 for row in rows:
@@ -56,7 +28,41 @@ for row in rows:
         'postal_code': row[5],
         'town_name': row[6]
     }
-    table.put_item(Item=item)
+
+    # Skip items with empty phone values
+    if not item['phone']:
+        print(f"Skipping item with empty phone value: {item}")
+        continue
+
+    try:
+        table.put_item(
+            Item=item,
+            ConditionExpression='attribute_not_exists(phone)'
+        )
+        print(f"Inserted item: {item}")
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            print(f"Duplicate item found for phone: {item['phone']}. Deleting existing item.")
+            # Find the existing item with the same phone
+            response = table.query(
+                IndexName='PhoneIndex',
+                KeyConditionExpression=boto3.dynamodb.conditions.Key('phone').eq(item['phone'])
+            )
+            if response['Items']:
+                existing_item = response['Items'][0]
+                # Delete the existing item
+                table.delete_item(
+                    Key={
+                        'name': existing_item['name'],
+                        'email': existing_item['email']
+                    }
+                )
+                print(f"Deleted existing item: {existing_item}")
+            # Insert the new item
+            table.put_item(Item=item)
+            print(f"Inserted new item: {item}")
+        else:
+            raise
 
 # Close the SQLite connection
 conn.close()
